@@ -9,7 +9,6 @@ from dotenv import load_dotenv
 load_dotenv()
 
 logger = logging.getLogger(__name__)
-logging.basicConfig(level=logging.INFO)
 
 
 class Qwen3VLWrapper:
@@ -116,7 +115,6 @@ class Qwen3VLWrapper:
         prompt,
         image=None,
         system_prompt=None,
-        use_outlet=False,
         temperature=0.7,
         max_tokens=1024,
     ):
@@ -128,7 +126,6 @@ class Qwen3VLWrapper:
         :param prompt: User text input
         :param image: Optional image (file path or bytes)
         :param system_prompt: Optional system instruction
-        :param use_outlet: Whether to trigger outlet pipeline
         :param temperature: Sampling temperature
         :param max_tokens: Max tokens in response
         :return: model response text
@@ -154,18 +151,12 @@ class Qwen3VLWrapper:
         }
 
         data = self._post("/api/chat/completions", payload)
-        answer_msg = data["choices"][0]["message"]
 
-        if use_outlet:
-            try:
-                self._post(
-                    "/api/chat/completed",
-                    {"model": self.model, "messages": messages + [answer_msg]},
-                )
-            except Exception as e:
-                logger.warning(f"Outlet call failed: {e}")
-
-        return answer_msg.get("content", "")
+        try:
+            return data["choices"][0]["message"].get("content", "")
+        except (KeyError, IndexError) as e:
+            logger.error(f"Invalid response format: {data}")
+            raise RuntimeError("Model response parsing failed") from e
 
 
 if __name__ == "__main__":
