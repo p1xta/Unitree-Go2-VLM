@@ -9,7 +9,7 @@ logger = logging.getLogger(__name__)
 
 SYSTEM_PROMPT = """
 Ты управляешь четвероногим роботом-собакой Unitree Go2.
-Твоя задача — преобразовать запрос пользователя и изображение в СТРОГИЙ JSON.
+Твоя задача - преобразовать запрос пользователя и изображение в СТРОГИЙ JSON.
 НИКОГДА не пиши текст вне JSON.
 Формат ответа:
 {
@@ -23,13 +23,13 @@ SYSTEM_PROMPT = """
 - mode = "action"
 - command = команда строго из списка:
   ["MoveForward", "MoveBackward", "MoveRight", "MoveLeft", "StopMove", "TurnLeft", "TurnRight", "StandUp", "StandDown", "Sit", "Dance1", "Dance2", "Hello"]
-- value — параметры движения (если нужны)
+- value - параметры движения (если нужны)
 - response = null
 
 Пример:
 {
   "mode": "action",
-  "command": "Move",
+  "command": "MoveForward",
   "value": 1.0,
   "response": null
 }
@@ -49,8 +49,7 @@ SYSTEM_PROMPT = """
 }
 
 3. Используй изображение:
-- если есть препятствие — НЕ выбирай движение вперед
-- если пользователь спрашивает про окружение — опиши его в response
+- если пользователь спрашивает про окружение - опиши его в response
 
 4. Если команда неясна:
 - mode = "response"
@@ -64,6 +63,9 @@ class VLMParser:
     def __init__(self, wrapper: Qwen3VLWrapper, system_prompt: str):
         self.wrapper = wrapper
         self.system_prompt = system_prompt
+        self.COMMAND_LIST = ["MoveForward", "MoveBackward", "MoveRight", "MoveLeft",
+                            "StopMove", "TurnLeft", "TurnRight", "StandUp", 
+                            "StandDown", "Sit", "Dance1", "Dance2", "Hello"]
 
     def _extract_json(self, text: str):
         """
@@ -82,7 +84,7 @@ class VLMParser:
                 pass
 
         logger.error(f"Failed to parse JSON: {text}")
-        raise ValueError("Invalid JSON from model")
+        return None
 
     def parse(self, user_text: str, image=None):
         """
@@ -96,17 +98,51 @@ class VLMParser:
             temperature=0.2,
         )
 
-        logger.info(f"RAW MODEL OUTPUT: {raw}")
+        logger.debug(f"RAW MODEL OUTPUT: {raw}")
 
         data = self._extract_json(raw)
 
-        if "mode" not in data:
-            raise ValueError("Missing 'mode' in response")
+        if data is None or "mode" not in data:
+            if data is None:
+                logger.warning("Model returned invalid JSON")
+            else:
+                logger.warning("Missing 'mode' in response")
 
-        if data["mode"] == "action" and not data.get("command"):
-            raise ValueError("Action mode without command")
+            return {
+                "mode": "response",
+                "command": None,
+                "value": {},
+                "response": "Не понял команду, повтори, пожалуйста"
+            }
+
+        if data["mode"] == "action":
+            command = data.get("command").strip()
+
+            if not command:
+                logger.warning("Action mode without command")
+                return {
+                    "mode": "response",
+                    "command": None,
+                    "value": {},
+                    "response": "Команда неполная, повтори"
+                }
+
+            if command not in self.COMMAND_LIST:
+                logger.warning(f"Unknown command from model: {command}")
+                return {
+                    "mode": "response",
+                    "command": None,
+                    "value": {},
+                    "response": "Я не знаю такой команды"
+                }
 
         if data["mode"] == "response" and not data.get("response"):
-            raise ValueError("Response mode without text")
+            logger.warning("Response mode without text")
+            return {
+                "mode": "response",
+                "command": None,
+                "value": {},
+                "response": "Я не знаю, что ответить"
+            }
 
         return data
