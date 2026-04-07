@@ -2,7 +2,7 @@ import json
 import re
 import logging
 
-from vlm_client import Qwen3VLWrapper
+from go2_vlm_core.vlm_client import Qwen3VLWrapper
 
 logger = logging.getLogger(__name__)
 
