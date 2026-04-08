@@ -1,0 +1,13 @@
+build/
+install/
+log/
+logs/
+bin/
+lib/
+
+COLCON_IGNORE
+AMENT_IGNORE
+
+__pycache__/
+
+.env

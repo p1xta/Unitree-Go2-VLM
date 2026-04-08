@@ -20,6 +20,7 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
+            'user_input_node = go2_vlm_core.user_input_node:main',
         ],
     },
 )
