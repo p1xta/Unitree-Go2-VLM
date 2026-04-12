@@ -1,0 +1,3 @@
+[submodule "/home/dmitriy/robodog_vlm/unitree-go2-vlm/go2_ros2_sdk"]
+	path = /home/dmitriy/robodog_vlm/unitree-go2-vlm/go2_ros2_sdk
+	url = https://gitlab.ci.nsu.ru/rtk-developers/iir-3rd-course/go2_ros2_sdk.git
