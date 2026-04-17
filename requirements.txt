@@ -13,3 +13,8 @@ scipy                 # resample_poly for audio resampling
 
 # Video / image processing
 opencv-python         # cv2 in vlm_core_node.py
+
+# Keyword spotting (go2_speech_recognition)
+torch==2.11.0
+torchvision==0.26.0
+torchaudio==2.11.0
