@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>Robodog Mic</title>
+<style>
+  :root { color-scheme: dark; }
+  body {
+    font-family: -apple-system, system-ui, sans-serif;
+    background: #111; color: #eee;
+    margin: 0; padding: 24px;
+    display: flex; flex-direction: column; gap: 18px;
+    min-height: 100vh; box-sizing: border-box;
+  }
+  h2 { margin: 0; font-weight: 500; }
+  button {
+    font-size: 22px; padding: 22px;
+    border-radius: 14px; border: none;
+    background: #2a8f3a; color: white;
+    width: 100%;
+    transition: background 0.15s;
+  }
+  button.recording { background: #c33840; }
+  button:disabled { background: #444; }
+  #status { font-size: 15px; color: #999; min-height: 20px; }
+  #level { height: 28px; background: #1a1a1a; border-radius: 4px; overflow: hidden; }
+  #level-bar {
+    height: 100%; width: 0%;
+    background: linear-gradient(90deg, #2a8f3a 0%, #b3a92a 70%, #c33840 100%);
+    transition: width 40ms linear;
+  }
+  #stats { font-family: ui-monospace, monospace; font-size: 13px; color: #888; }
+</style>
+</head>
+<body>
+<h2>Robodog Microphone</h2>
+<button id="btn">Start streaming</button>
+<div id="level"><div id="level-bar"></div></div>
+<div id="status">idle</div>
+<div id="stats"></div>
+
+<script>
+const btn = document.getElementById('btn');
+const statusEl = document.getElementById('status');
+const levelBar = document.getElementById('level-bar');
+const statsEl = document.getElementById('stats');
+
+let ws = null;
+let audioCtx = null;
+let workletNode = null;
+let mediaStream = null;
+let recording = false;
+let bytesSent = 0;
+let startedAt = 0;
+
+btn.onclick = async () => {
+  if (recording) stop(); else await start();
+};
+
+async function start() {
+  btn.disabled = true;
+  statusEl.textContent = 'requesting mic...';
+  try {
+    mediaStream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        channelCount: 1,
+        echoCancellation: true,
+        noiseSuppression: false,
+        autoGainControl: false,
+      },
+    });
+  } catch (e) {
+    statusEl.textContent = 'mic denied: ' + e.message;
+    btn.disabled = false;
+    return;
+  }
+
+  const wsUrl = `wss://${location.host}/ws/audio`;
+  ws = new WebSocket(wsUrl);
+  ws.binaryType = 'arraybuffer';
+
+  ws.onopen = async () => {
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+    try {
+      await audioCtx.audioWorklet.addModule('/static/processor.js');
+    } catch (e) {
+      statusEl.textContent = 'worklet load failed: ' + e.message;
+      stop();
+      return;
+    }
+    const source = audioCtx.createMediaStreamSource(mediaStream);
+    workletNode = new AudioWorkletNode(audioCtx, 'pcm-downsampler', {
+      processorOptions: { targetRate: 16000 },
+    });
+    workletNode.port.onmessage = (e) => {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(e.data.pcm);
+        bytesSent += e.data.pcm.byteLength;
+      }
+      const lvl = Math.min(1, e.data.rms * 8);
+      levelBar.style.width = (lvl * 100) + '%';
+    };
+    source.connect(workletNode);
+    workletNode.connect(audioCtx.destination);
+
+    recording = true;
+    startedAt = performance.now();
+    bytesSent = 0;
+    btn.textContent = 'Stop';
+    btn.classList.add('recording');
+    btn.disabled = false;
+    statusEl.textContent = `connected @ ${audioCtx.sampleRate} Hz, streaming 16 kHz`;
+    statsTimer = setInterval(updateStats, 500);
+  };
+
+  ws.onclose = () => {
+    statusEl.textContent = 'disconnected';
+    if (recording) stop();
+  };
+  ws.onerror = () => { statusEl.textContent = 'ws error'; };
+}
+
+let statsTimer = null;
+function updateStats() {
+  if (!recording) return;
+  const sec = (performance.now() - startedAt) / 1000;
+  const kbps = (bytesSent * 8 / 1000 / sec).toFixed(1);
+  statsEl.textContent = `${sec.toFixed(1)}s  ${kbps} kbps  ${(bytesSent/1024).toFixed(0)} KB`;
+}
+
+function stop() {
+  recording = false;
+  btn.textContent = 'Start streaming';
+  btn.classList.remove('recording');
+  btn.disabled = false;
+  levelBar.style.width = '0%';
+  if (statsTimer) { clearInterval(statsTimer); statsTimer = null; }
+  if (workletNode) { workletNode.disconnect(); workletNode = null; }
+  if (audioCtx) { audioCtx.close(); audioCtx = null; }
+  if (mediaStream) { mediaStream.getTracks().forEach(t => t.stop()); mediaStream = null; }
+  if (ws) { ws.close(); ws = null; }
+}
+</script>
+</body>
+</html>
