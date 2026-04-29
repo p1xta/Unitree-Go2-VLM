@@ -187,8 +187,6 @@ class WakeWordInference:
 
                 if confidence > max_confidence:
                     max_confidence = confidence
-
-                if triggered_window_start_sample is None and confidence > self.threshold:
                     triggered_window_start_sample = idx 
 
         return {
