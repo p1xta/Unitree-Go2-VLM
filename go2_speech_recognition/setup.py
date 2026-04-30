@@ -27,6 +27,7 @@ setup(
     },
     entry_points={
         'console_scripts': [
+            'speech_recognition_node = go2_speech_recognition_node.speech_recognition_node:main',
         ],
     },
 )
