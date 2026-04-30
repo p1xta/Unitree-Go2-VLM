@@ -150,6 +150,10 @@ class SpeechPipelineNode(Node):
             out_msg.data = text
             self.text_pub.publish(out_msg)
 
+            self.get_logger().info("Command published successfully.")
+
+            self.vad.flush()
+
         except Exception as e:
             self.get_logger().error(f"Speech segment processing failed: {e}")
 
@@ -181,4 +185,3 @@ def main(args=None):
 
 if __name__ == "__main__":
     main()
-    
