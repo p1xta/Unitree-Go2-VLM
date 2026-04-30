@@ -1,5 +1,3 @@
-import logging
-
 import numpy as np
 
 import rclpy
@@ -12,8 +10,6 @@ from go2_interfaces.msg import AudioData
 from go2_speech_recognition.voice_activity_detector import VADetector
 from go2_speech_recognition.name_spotting import WakeWordInference
 from go2_speech_recognition.speech_to_text import SpeechToText, STTConfig
-
-logger = logging.getLogger(__name__)
 
 
 SAMPLE_RATE = 16000
@@ -57,10 +53,10 @@ class SpeechPipelineNode(Node):
             qos,
         )
 
-        logger.info("Loading wake word model...")
+        self.get_logger().info("Loading wake word model...")
         self.kws = WakeWordInference(threshold=wake_threshold)
 
-        logger.info("Loading STT model...")
+        self.get_logger().info("Loading STT model...")
         self.stt = SpeechToText(
             STTConfig(
                 model_size=stt_model_size,
@@ -70,15 +66,15 @@ class SpeechPipelineNode(Node):
             )
         )
 
-        logger.info("Initializing VAD...")
+        self.get_logger().info("Initializing VAD...")
         self.vad = VADetector(
             on_speech=self.process_speech_segment,
             threshold=0.5,
-            min_silence_duration_ms=1500,
+            min_silence_duration_ms=600,
             speech_pad_ms=200,
         )
 
-        logger.info("Speech pipeline node started.")
+        self.get_logger().info("Speech pipeline node started.")
 
     def audio_callback(self, msg: AudioData):
         """
@@ -97,7 +93,7 @@ class SpeechPipelineNode(Node):
             self.vad.process_chunk(audio)
 
         except Exception as e:
-            logger.error(f"Audio callback failed: {e}")
+            self.get_logger().error(f"Audio callback failed: {e}")
 
     def process_speech_segment(self, speech_audio: np.ndarray):
         """
@@ -118,20 +114,21 @@ class SpeechPipelineNode(Node):
             kws_result = self.kws.predict(speech_audio, sample_rate=SAMPLE_RATE)
 
             if not kws_result["has_wake_word"]:
-                logger.debug("Wake word not detected.")
+                self.get_logger().debug("Wake word not detected.")
                 return
 
             confidence = kws_result["confidence"]
             wake_index = kws_result.get("wake_word_start", 0)
 
-            logger.info(
+            self.get_logger().info(
                 f"Wake word detected (confidence={confidence:.3f})"
             )
 
+            # Cut audio from wake word onward
             command_audio = speech_audio[wake_index:]
 
             if len(command_audio) < SAMPLE_RATE * 0.3:
-                logger.warning("Command too short after wake word.")
+                self.get_logger().warning("Command too short after wake word.")
                 return
 
             text, stt_conf = self.stt.transcribe(
@@ -142,10 +139,10 @@ class SpeechPipelineNode(Node):
             text = text.strip()
 
             if not text:
-                logger.warning("STT returned empty text.")
+                self.get_logger().warning("STT returned empty text.")
                 return
 
-            logger.info(
+            self.get_logger().info(
                 f"Recognized command: '{text}' (stt_conf={stt_conf:.3f})"
             )
 
@@ -154,7 +151,7 @@ class SpeechPipelineNode(Node):
             self.text_pub.publish(out_msg)
 
         except Exception as e:
-            logger.error(f"Speech segment processing failed: {e}")
+            self.get_logger().error(f"Speech segment processing failed: {e}")
 
     def destroy_node(self):
         """
@@ -184,3 +181,4 @@ def main(args=None):
 
 if __name__ == "__main__":
     main()
+    
