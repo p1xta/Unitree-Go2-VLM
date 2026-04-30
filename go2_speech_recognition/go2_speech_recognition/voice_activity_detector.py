@@ -90,3 +90,12 @@ class VADetector:
         self._speech_chunks = []
         self._speech_start_idx = None
         self._in_speech = False
+
+    def reset(self) -> None:
+        self._vad.reset_states()
+        self._history = np.zeros(0, dtype=np.float32)
+        self._history_base = 0
+        self._total_samples = 0
+        self._speech_chunks = []
+        self._speech_start_idx = None
+        self._in_speech = False

@@ -129,6 +129,7 @@ class SpeechPipelineNode(Node):
 
             if len(command_audio) < SAMPLE_RATE * 0.3:
                 self.get_logger().warning("Command too short after wake word.")
+                self.vad.reset()
                 return
 
             text, stt_conf = self.stt.transcribe(
@@ -140,6 +141,7 @@ class SpeechPipelineNode(Node):
 
             if not text:
                 self.get_logger().warning("STT returned empty text.")
+                self.vad.reset()
                 return
 
             self.get_logger().info(
@@ -152,17 +154,19 @@ class SpeechPipelineNode(Node):
 
             self.get_logger().info("Command published successfully.")
 
-            self.vad.flush()
+            self.vad.reset()
 
         except Exception as e:
             self.get_logger().error(f"Speech segment processing failed: {e}")
+        finally:
+            self.vad.reset()
 
     def destroy_node(self):
         """
         Cleanup before shutdown.
         """
         try:
-            self.vad.flush()
+            self.vad.reset()
         except Exception:
             pass
 
