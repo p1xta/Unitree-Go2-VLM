@@ -18,25 +18,21 @@ INT16_MAX = 32768.0
 
 class SpeechPipelineNode(Node):
     """
-    Full speech interaction pipeline:
-
+    Full speech interaction pipeline.
     audio_raw -> VAD -> KWS -> STT -> /go2_vlm/user_input
-
-    Workflow:
-    1. Continuously receives microphone PCM chunks
-    2. VAD detects speech segments
-    3. Wake word model checks for dog name
-    4. If wake word detected, full segment is transcribed
-    5. Final recognized command is published
     """
 
     def __init__(self):
         super().__init__("speech_pipeline_node")
 
-        wake_threshold = 0.65
+        wake_threshold = 0.75
         stt_model_size = "base"
         audio_topic = "/audio_raw"
         output_topic = "/go2_vlm/user_input"
+
+        self.audio_buffer = []
+        self.last_audio_time = None
+        self.buffer_gap_threshold = 1.0 
 
         qos = QoSProfile(
             reliability=ReliabilityPolicy.BEST_EFFORT,
@@ -69,8 +65,8 @@ class SpeechPipelineNode(Node):
         self.get_logger().info("Initializing VAD...")
         self.vad = VADetector(
             on_speech=self.process_speech_segment,
-            threshold=0.5,
-            min_silence_duration_ms=600,
+            threshold=0.5, # TODO: find optimal threshold
+            min_silence_duration_ms=1000, # TODO: find optimal duration
             speech_pad_ms=200,
         )
 
@@ -78,10 +74,8 @@ class SpeechPipelineNode(Node):
 
     def audio_callback(self, msg: AudioData):
         """
-        Receive raw PCM audio chunks and feed them to VAD.
-
-        Args:
-            msg (AudioData): Incoming audio message
+        Buffer incoming audio chunks until silence gap > threshold,
+        then send full buffered audio to VAD.
         """
         try:
             audio = np.frombuffer(msg.data, dtype=np.int16).astype(np.float32)
@@ -90,7 +84,37 @@ class SpeechPipelineNode(Node):
             if audio.size == 0:
                 return
 
-            self.vad.process_chunk(audio)
+            current_time = self.get_clock().now().nanoseconds / 1e9
+
+            if self.last_audio_time is None:
+                self.audio_buffer.append(audio)
+                self.last_audio_time = current_time
+                return
+
+            time_gap = current_time - self.last_audio_time
+
+            if time_gap < self.buffer_gap_threshold:
+                self.audio_buffer.append(audio)
+
+            else:
+                if self.audio_buffer:
+                    full_audio = np.concatenate(self.audio_buffer)
+
+                    chunk_size = 512
+                    for i in range(0, len(full_audio), chunk_size):
+                        chunk = full_audio[i:i + chunk_size]
+
+                        if len(chunk) < chunk_size:
+                            pad = np.zeros(
+                                chunk_size - len(chunk),
+                                dtype=np.float32
+                            )
+                            chunk = np.concatenate([chunk, pad])
+
+                        self.vad.process_chunk(chunk)
+
+                self.audio_buffer = [audio]
+            self.last_audio_time = current_time
 
         except Exception as e:
             self.get_logger().error(f"Audio callback failed: {e}")
@@ -98,8 +122,6 @@ class SpeechPipelineNode(Node):
     def process_speech_segment(self, speech_audio: np.ndarray):
         """
         Handle completed speech segment from VAD.
-
-        Pipeline:
         - Run wake word detection
         - If wake word exists, transcribe command
         - Publish recognized text
@@ -124,7 +146,6 @@ class SpeechPipelineNode(Node):
                 f"Wake word detected (confidence={confidence:.3f})"
             )
 
-            # Cut audio from wake word onward
             command_audio = speech_audio[wake_index:]
 
             if len(command_audio) < SAMPLE_RATE * 0.3:
