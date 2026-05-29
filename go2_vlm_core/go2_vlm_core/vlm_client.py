@@ -118,18 +118,6 @@ class Qwen3VLWrapper:
         temperature=0.7,
         max_tokens=1024,
     ):
-        """
-        Send a chat request to the model.
-
-        Supports both text-only and multimodal (text + image) inputs.
-
-        :param prompt: User text input
-        :param image: Optional image (file path or bytes)
-        :param system_prompt: Optional system instruction
-        :param temperature: Sampling temperature
-        :param max_tokens: Max tokens in response
-        :return: model response text
-        """
         content = [{"type": "text", "text": prompt}]
 
         if image:
@@ -142,6 +130,34 @@ class Qwen3VLWrapper:
 
         messages.append({"role": "user", "content": content})
 
+        return self._chat_messages(messages, temperature, max_tokens)
+
+    def chat_with_history(
+        self,
+        history,
+        system_prompt=None,
+        temperature=0.7,
+        max_tokens=1024,
+    ):
+        """
+        Send a chat request with full conversation history.
+
+        :param history: List of {"role": "user"/"assistant", "content": ...} dicts
+        :param system_prompt: Optional system instruction prepended before history
+        :param temperature: Sampling temperature
+        :param max_tokens: Max tokens in response
+        :return: model response text
+        """
+        messages = []
+
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+
+        messages.extend(history)
+
+        return self._chat_messages(messages, temperature, max_tokens)
+
+    def _chat_messages(self, messages, temperature, max_tokens):
         payload = {
             "model": self.model,
             "messages": messages,
