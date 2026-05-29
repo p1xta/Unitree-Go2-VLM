@@ -11,3 +11,4 @@ AMENT_IGNORE
 __pycache__/
 
 .env
+.DS_Store
