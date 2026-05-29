@@ -8,8 +8,15 @@ cryptography          # AESGCM in go2_connection.py
 pycryptodome          # Crypto.PublicKey / Crypto.Cipher in encryption.py
 
 # Audio processing (go2_ros2_sdk)
+faster-whisper        # Whisper model for speech-to-text
+librosa               # audio loading and processing
 numpy==1.26.4
 scipy                 # resample_poly for audio resampling
 
 # Video / image processing
 opencv-python         # cv2 in vlm_core_node.py
+
+# Keyword spotting (go2_speech_recognition)
+torch==2.11.0
+torchvision==0.26.0
+torchaudio==2.11.0

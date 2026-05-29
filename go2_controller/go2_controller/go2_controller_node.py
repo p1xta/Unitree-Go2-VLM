@@ -1,12 +1,13 @@
 import math
+import time
 
 import rclpy
 from rclpy.node import Node
-from geometry_msgs.msg import Twist
-from std_srvs.srv import Trigger
+from rclpy.callback_groups import ReentrantCallbackGroup
+from rclpy.executors import MultiThreadedExecutor
 
-from go2_interfaces.msg import VlmCommand, WebRtcReq
-from go2_interfaces.srv import MoveForDuration
+from go2_interfaces.msg import WebRtcReq
+from go2_interfaces.srv import ExecuteAction, MoveToRelativePose
 
 WEBRTC_CMD = {
     "Damp": 1001,
@@ -56,111 +57,115 @@ WEBRTC_CMD = {
     "Handstand": 1301,
 }
 
-MOVEMENT_CMD = {
-    "MoveForward", "MoveBackward",
-    "MoveRight", "MoveLeft",
-    "TurnRight", "TurnLeft",
+# command -> (dx, dy, dyaw_radians) from the value argument
+MOVEMENT_OFFSET = {
+    "MoveForward":  lambda v: (float(v),  0.0, 0.0),
+    "MoveBackward": lambda v: (-float(v), 0.0, 0.0),
+    "MoveLeft":     lambda v: (0.0,  float(v), 0.0),
+    "MoveRight":    lambda v: (0.0, -float(v), 0.0),
+    "TurnLeft":     lambda v: (0.0, 0.0,  math.radians(float(v))),
+    "TurnRight":    lambda v: (0.0, 0.0, -math.radians(float(v))),
 }
+
+# fire-and-forget commands need a delay so the action visibly completes
+# before the agent loop re-prompts the VLM
+WEBRTC_SETTLE_TIME = 2.0  # seconds
 
 
 class ControllerNode(Node):
     def __init__(self):
         super().__init__("controller_node")
 
-        self.declare_parameter("max_linear_vel", 0.5)
-        self.declare_parameter("max_angular_vel", 0.5)
+        self.declare_parameter("webrtc_settle_time", WEBRTC_SETTLE_TIME)
+        self._webrtc_settle = self.get_parameter("webrtc_settle_time").get_parameter_value().double_value
 
-        self._max_linear_vel = self.get_parameter("max_linear_vel").get_parameter_value().double_value
-        self._max_angular_vel = self.get_parameter("max_angular_vel").get_parameter_value().double_value
+        self._cb_group = ReentrantCallbackGroup()
 
-        self._cmd_pub = self.create_publisher(Twist, "/cmd_vel_out", 10)
         self._webrtc_pub = self.create_publisher(WebRtcReq, "/webrtc_req", 10)
 
-        self._action_sub = self.create_subscription(VlmCommand, "/go2_vlm/vlm_action", self._action_cb, 10)
-
-        self._move_srv_client = self.create_client(MoveForDuration, "/go2_vlm/move_for_duration")
-
-    def _action_cb(self, msg: VlmCommand):
-        command = msg.command
-        value = msg.value
-
-        if command in WEBRTC_CMD:
-            self._handle_webrtc_cmd(command)
-        elif command in MOVEMENT_CMD:
-            self._handle_movement_cmd(command, value)
-
-    def _handle_webrtc_cmd(self, command: str):
-        command_api_id = WEBRTC_CMD[command]
-
-        webrtc_req = WebRtcReq()
-        webrtc_req.topic = "rt/api/sport/request"
-        webrtc_req.api_id = command_api_id
-
-        self._webrtc_pub.publish(webrtc_req)
-        self.get_logger().info(f"WebRTC: command={command}, api_id={command_api_id}")
-
-    def _handle_movement_cmd(self, command: str, value: float):
-        vx, vy, vyaw = 0.0, 0.0, 0.0
-
-        if command == "MoveForward":
-            vx = self._max_linear_vel
-            duration = value / self._max_linear_vel
-        elif command == "MoveBackward":
-            vx = -self._max_linear_vel
-            duration = value / self._max_linear_vel
-        elif command == "MoveRight":
-            vy = -self._max_linear_vel 
-            duration = value / self._max_linear_vel
-        elif command == "MoveLeft":
-            vy = self._max_linear_vel   
-            duration = value / self._max_linear_vel
-        elif command == "TurnRight":
-            vyaw = -self._max_angular_vel  #
-            duration = math.radians(value) / self._max_angular_vel
-        elif command == "TurnLeft":
-            vyaw = self._max_angular_vel  
-            duration = math.radians(value) / self._max_angular_vel
-        else:
-            return
-
-        self._call_move_service(vx, vy, vyaw, duration)
-
-    def _call_move_service(self, vx: float, vy: float, vyaw: float, duration: float):
-        if not self._move_srv_client.service_is_ready():
-            self.get_logger().warning("move_for_duration service is not ready")
-            return
-
-        req = MoveForDuration.Request()
-        req.linear_x = float(vx)
-        req.linear_y = float(vy)
-        req.angular_z = float(vyaw)
-        req.duration = float(duration)
-
-        self.get_logger().info(
-            f"Command: vx={vx:.2f} vy={vy:.2f} vyaw={vyaw:.2f} dur={duration:.1f}s"
+        self._move_client = self.create_client(
+            MoveToRelativePose, "/go2_vlm/move_to_relative_pose",
+            callback_group=self._cb_group,
         )
 
-        future = self._move_srv_client.call_async(req)
-        future.add_done_callback(self._move_done_callback)
+        self.create_service(
+            ExecuteAction, "/go2_vlm/execute_action",
+            self._execute_action_cb,
+            callback_group=self._cb_group,
+        )
 
-    def _move_done_callback(self, future):
-        try:
-            result = future.result()
-            if result.success:
-                self.get_logger().info(
-                    f"Movement completed: {result.message} ({result.actual_duration:.1f}s)"
-                )
-            else:
-                self.get_logger().error(f"Movement failed: {result.message}")
-        except Exception as e:
-            self.get_logger().error(f"MoveService exception: {str(e)}")
+    def _execute_action_cb(self, request, response):
+        command = request.command.strip()
+        value = request.value
+
+        if command in WEBRTC_CMD:
+            return self._handle_webrtc_cmd(command, response)
+        if command in MOVEMENT_OFFSET:
+            return self._handle_movement_cmd(command, value, response)
+
+        response.success = False
+        response.message = f"Unknown command: {command}"
+        self.get_logger().warning(response.message)
+        return response
+
+    def _handle_webrtc_cmd(self, command: str, response):
+        api_id = WEBRTC_CMD[command]
+        req = WebRtcReq()
+        req.topic = "rt/api/sport/request"
+        req.api_id = api_id
+        self._webrtc_pub.publish(req)
+        self.get_logger().info(f"WebRTC: {command} (api_id={api_id})")
+
+        # blocking wait so the agent loop sees a finished action
+        time.sleep(self._webrtc_settle)
+
+        response.success = True
+        response.message = f"{command} dispatched"
+        return response
+
+    def _handle_movement_cmd(self, command: str, value: float, response):
+        dx, dy, dyaw = MOVEMENT_OFFSET[command](value)
+
+        if not self._move_client.wait_for_service(timeout_sec=1.0):
+            response.success = False
+            response.message = "move_to_relative_pose service unavailable"
+            self.get_logger().error(response.message)
+            return response
+
+        move_req = MoveToRelativePose.Request()
+        move_req.dx = float(dx)
+        move_req.dy = float(dy)
+        move_req.dyaw = float(dyaw)
+        move_req.timeout = 0.0
+
+        self.get_logger().info(
+            f"{command} -> dx={dx:.2f} dy={dy:.2f} dyaw={math.degrees(dyaw):.1f}deg"
+        )
+
+        future = self._move_client.call_async(move_req)
+        while rclpy.ok() and not future.done():
+            time.sleep(0.05)
+
+        if not future.done():
+            response.success = False
+            response.message = "move call interrupted"
+            return response
+
+        result = future.result()
+        response.success = result.success
+        response.message = result.message
+        return response
 
 
 def main(args=None):
     rclpy.init(args=args)
     node = ControllerNode()
+
+    executor = MultiThreadedExecutor()
+    executor.add_node(node)
+
     try:
-        rclpy.spin(node)
+        executor.spin()
     except KeyboardInterrupt:
         pass
     finally:
