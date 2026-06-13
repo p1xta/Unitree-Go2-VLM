@@ -1,3 +1,5 @@
+import re
+
 import numpy as np
 
 import rclpy
@@ -29,6 +31,8 @@ class SpeechPipelineNode(Node):
         stt_model_size = "base"
         audio_topic = "/audio_raw"
         output_topic = "/go2_vlm/user_input"
+        self.WAKE_WORD_PATTERN = re.compile(r"\bмарвин(?:а|у|ом|е)?\b",
+                                            flags=re.IGNORECASE)
 
         self.audio_buffer = []
         self.last_audio_time = None
@@ -176,6 +180,12 @@ class SpeechPipelineNode(Node):
             )
 
             text = text.strip()
+
+            if not self.WAKE_WORD_PATTERN.search(text):
+                self.get_logger().warning(
+                    f"Wake word not found in text: '{text}'"
+                )
+                return
 
             if not text:
                 self.get_logger().warning("STT returned empty text.")
